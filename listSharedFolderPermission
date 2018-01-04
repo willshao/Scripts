@@ -1,0 +1,96 @@
+
+#--------------------------------------------------------------------------------- 
+#The sample scripts are not supported under any Microsoft standard support 
+#program or service. The sample scripts are provided AS IS without warranty  
+#of any kind. Microsoft further disclaims all implied warranties including,  
+#without limitation, any implied warranties of merchantability or of fitness for 
+#a particular purpose. The entire risk arising out of the use or performance of  
+#the sample scripts and documentation remains with you. In no event shall 
+#Microsoft, its authors, or anyone else involved in the creation, production, or 
+#delivery of the scripts be liable for any damages whatsoever (including, 
+#without limitation, damages for loss of business profits, business interruption, 
+#loss of business information, or other pecuniary loss) arising out of the use 
+#of or inability to use the sample scripts or documentation, even if Microsoft 
+#has been advised of the possibility of such damages 
+#--------------------------------------------------------------------------------- 
+
+#requires -Version 2.0
+
+<#
+ 	.SYNOPSIS
+        This script can be list all of shared folder permission.
+		
+    .DESCRIPTION
+        This script can be list all of shared folder permission.
+		
+
+	.PARAMETER	<ComputerName <string[]>
+		Specifies the computers on which the command runs. The default is the local computer. 
+		
+	.PARAMETER  <TcsvFileName>
+		Specifies a csv file to store the output.  The default filename is InfoList.csv
+		   
+		
+		
+	#>
+[CmdletBinding(DefaultParameterSetName="Encryption")]
+Param
+(
+    [Parameter(Mandatory=$false)]
+	[Alias('CSVFileName')][String]$TcsvFileName="InfoList.csv", # Here you can specify the output file 
+
+	[Parameter(Mandatory=$false)]
+	[Alias('Computer')][String[]]$ComputerName=@(Get-ADComputer -Filter 'ObjectClass -eq "Computer"' | Select -Expand Name)
+
+)
+
+
+$RecordErrorAction = $ErrorActionPreference
+#change the error action temporarily
+$ErrorActionPreference = "SilentlyContinue"
+ Add-Type -AssemblyName "System.Web" -ErrorAction Stop
+
+Function GetSharedFolderPermission($ComputerName)
+{
+    $Objs = @()
+	#test server connectivity
+	$PingResult = Test-Connection -ComputerName $ComputerName -Count 1 -Quiet
+	if($PingResult)
+	{
+
+		$SharedFolderSecs = Get-WmiObject -Class Win32_LogicalShareSecuritySetting `
+		-ComputerName $ComputerName -ErrorAction SilentlyContinue
+
+		
+		foreach ($SharedFolderSec in $SharedFolderSecs) 
+		{ 
+			
+	        $SecDescriptor = $SharedFolderSec.GetSecurityDescriptor()
+			if($UserName='everyone')
+                {
+				    #customize the property
+				    $Properties = @{'ComputerName' = $ComputerName
+								    'ConnectionStatus' = "Success"
+								    'SharedFolderName' = $SharedFolderSec.Name
+								    'SecurityPrincipal' = $UserName}
+				    $SharedACLs = New-Object -TypeName PSObject -Property $Properties
+				    $Objs += $SharedACLs
+	         } 
+        } $Objs 
+      #$Objs|Select-Object ComputerName,SharedFolderName,SecurityPrincipal | Export-Csv -Path $TcsvFileName -NoTypeInformation
+	}
+	
+}
+
+$results=@()
+foreach($CN in $ComputerName)
+{	    
+		$result=GetSharedFolderPermission -ComputerName $CN
+       # $result|Select-Object ComputerName,SharedFolderName,SecurityPrincipal | Export-Csv -Path $TcsvFileName -NoTypeInformation
+        $results+=$result        
+}
+$results|Select-Object ComputerName,SharedFolderName,SecurityPrincipal | Export-Csv -Path $TcsvFileName -NoTypeInformation
+#restore the error action
+$ErrorActionPreference = $RecordErrorAction
+
+
