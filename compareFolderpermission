@@ -1,0 +1,247 @@
+#=======================================================================
+#      Microsoft provides programming examples for illustration only, 
+#      without warranty either expressed or implied, including, but 
+#      not limited to, the implied warranties of merchantability 
+#      and/or fitness for a particular purpose. It is assumed 
+#      that you are familiar with the programming language being 
+#      demonstrated and the tools used to create and debug procedures. 
+#      Microsoft support professionals can help explain the functionality 
+#      of a particular procedure, but they will not modify these examples 
+#      to provide added functionality or construct procedures to meet your 
+#      specific needs. If you have limited programming experience, you may 
+#      want to contact a Microsoft Certified Partner or the Microsoft fee-based 
+#      consulting line at (800) 936-5200. For more information about Microsoft 
+#      Certified Partners, please visit the following Microsoft Web site: 
+#      http://www.microsoft.com/partner/referral/
+#
+#========================= Start of the script =========================
+
+function CompareFolderPerm{
+param(
+  [string]$folder1,
+  [string]$folder2 
+  )
+
+    $checkedRights="FullControl;Modify, Synchronize;ReadAndExecute, Synchronize"
+
+    $comparerulefortwofolders="FullControl+Modify, Synchronize-Modify, Synchronize;ReadAndExecute, Synchronize-ReadAndExecute, Synchronize;ListFolderContents-ListFolderContents"
+
+    $excludegroups="system,a133_ntfsm,administrators"
+
+    $file_output="c:\itm\outputList.txt"
+
+    #if(Test-Path $file_output){
+    #    Remove-Item $file_output
+    #}
+
+
+    (Get-Date).ToString('hh:mm:ss tt')+ `
+    ": Start to compare folder:" + $folder1+" and folder:" +$folder2>>$file_output
+
+
+    $ret=GetFolderPerm -folder $folder1 -checkedRights $checkedRights -excludegroups $excludegroups -compareRules $comparerulefortwofolders
+    $ret2=GetFolderPerm -folder $folder2 -checkedRights $checkedRights -excludegroups $excludegroups -compareRules $comparerulefortwofolders
+
+    
+
+    foreach ($rule in $comparerulefortwofolders.Split(";")){
+         
+        #Compare folder1 with folder2 and find those members that exist in Folder1 but not exist in Folder2
+        
+        $differentmeb1,$differentmeb2
+
+
+        "============ Rule: "+ $rule+" ============">>$file_output
+        #"Members that in " + $folder1 + ",but no in " + $folder2>>$file_output
+        #"Members that in the 1st folder, but not in 2nd folder">>$file_output
+        $differentmeb1=CompareFolderPermSub -folderpermlist1 $ret -folderpermlist2 $ret2 -comparerule $rule -outputfile $file_output -reverserule $false
+
+        #Compare folder2 with folder1 and find those members that exist in Folder2 but not exist in Folder1
+        #"Members that in " + $folder2 + ",but no in " + $folder1>>$file_output
+        #"Members that in the 2nd folder, but not in 1st folder">>$file_output
+        $differentmeb2=CompareFolderPermSub -folderpermlist1 $ret2 -folderpermlist2 $ret -comparerule $rule -outputfile $file_output -reverserule $true
+
+        if ($differentmeb1.Count -eq 0 -and $differentmeb2.Count -eq 0){
+            "No different members for these two folders">>$file_output
+        } else{
+            "****** Summary ******">>$file_output
+            "Totally " + ($differentmeb1.Count+$differentmeb2.Count).ToString()  + " different members">>$file_output
+            foreach ($mem in $differentmeb1){
+                $mem.ToString()>>$file_output
+            }
+            foreach ($mem in $differentmeb2){
+                $mem.ToString()>>$file_output
+            }
+
+
+            "****** Details ******">>$file_output
+            $differentmeb1.Count.ToString()+" members in the 1st folder, but not in 2nd folder">>$file_output
+            if ($differentmeb1.Count -ne 0){
+                foreach ($mem in $differentmeb1){
+                $mem.ToString()>>$file_output
+                }
+            }
+
+            $differentmeb2.Count.ToString()+" members in the 2nd folder, but not in 1st folder">>$file_output
+            if ($differentmeb2.Count -ne 0){
+                foreach ($mem in $differentmeb2){
+                $mem.ToString()>>$file_output
+                }
+            }
+           }
+
+           #Add new line for each rule
+           "`n">>$file_output
+    }
+
+
+    (Get-Date).ToString('hh:mm:ss tt')+ ": Finish compare">>$file_output
+    "`n">>$file_output
+    "`n">>$file_output
+    "`n">>$file_output
+  }
+
+
+  function CompareFolderPermSub{
+  param(
+  [System.Object[]]$folderpermlist1,
+  [System.Object[]]$folderpermlist2,
+  [String]$comparerule,
+  [String]$outputfile,
+  [bool]$reverserule
+  )
+
+    $rulefrom=$comparerule.Split("-")[0]
+    $ruleto=$comparerule.Split("-")[1]
+
+
+    if ($reverserule){
+        $rulefrom=$comparerule.Split("-")[1]
+        $ruleto=$comparerule.Split("-")[0]
+    }
+
+    $ret=@()
+
+    foreach ($folderperm1 in $folderpermlist1){
+        if ($rulefrom.IndexOf($folderperm1.FileSystemRights.ToString()) -ge 0){
+            $samememberwithsamerights=$false
+            foreach ($folderperm2 in $folderpermlist2){
+            if ($ruleto.IndexOf($folderperm2.FileSystemRights.ToString()) -ge 0){
+                if ($folderperm1.membername -eq $folderperm2.membername){
+                    $samememberwithsamerights=$true
+                    break
+                }
+               }
+            }
+
+            if ($samememberwithsamerights -eq $false){
+                $ret+=$folderperm1.membername.ToString()
+           }
+        }
+    }
+    return $ret
+  }
+
+
+  function GetFolderPerm{
+  param(
+  [string]$folder,
+  [string]$checkedRights,
+  [string]$excludegroups,
+  [string]$compareRules
+  )
+    
+
+      #Get ACL
+      $folerpermlist=Get-Acl $folder
+
+     $folderaccessObjlist=@()
+
+      foreach($folderaccess in $folerpermlist.Access){
+      if ($checkedRights.IndexOf($folderaccess.FileSystemRights.ToString()) -ge 0){
+        
+        ##Get AD group members
+        $identityname=$folderaccess.IdentityReference.ToString().SubString($folderaccess.IdentityReference.ToString().Indexof("\")+1)
+        if ($folderaccess.IdentityReference.ToString().Contains("BUILTIN") -eq $false `
+        -and $folderaccess.IdentityReference.ToString().Contains("NT AUTHORITY") -eq $false `
+        -and $folderaccess.IdentityReference.ToString().ToLower().Contains("a133_a_0001") -eq $false `
+        -and $excludegroups.IndexOf($identityname) -lt 0){
+            
+            $members=""
+            try{
+                $members=Get-ADUser -Identity $identityname
+            }
+            catch{
+                $members=Get-ADGroupMember -Identity $identityname -Recursive
+            }
+
+
+            foreach($groupmember in $members){
+                $folderaccessObj=New-Object System.Object
+
+                 #Below logic handle List folder contents and Read & Execute permissions.
+                 #List folder contents:Permits viewing and listing of files and subfolders as well as executing of files; inherited by folders only
+                 #Read & Execute:Permits viewing and listing of files and subfolders as well as executing of files; inherited by files and folders
+                 #More details please refer: https://msdn.microsoft.com/en-us/library/bb727008.aspx
+               if ($compareRules.Contains("ListFolderContents") `
+               -and $folderaccess.FileSystemRights.ToString() -eq "ReadAndExecute, Synchronize"){
+                    if ($folderaccess.InheritanceFlags.ToString() -eq "ContainerInherit, ObjectInherit" `
+                    -or $folderaccess.InheritanceFlags.ToString() -eq "ObjectInherit, ContainerInherit"){
+                        $folderaccessObj | Add-Member -type NoteProperty -name "FileSystemRights" -Value $folderaccess.FileSystemRights
+                    }
+                    else{
+                        $folderaccessObj | Add-Member -type NoteProperty -name "FileSystemRights" -Value "ListFolderContents"
+                    }
+               } else{
+                    $folderaccessObj | Add-Member -type NoteProperty -name "FileSystemRights" -Value $folderaccess.FileSystemRights
+               }
+
+                #$folderaccessObj | Add-Member -type NoteProperty -name "FileSystemRights" -Value $folderaccess.FileSystemRights
+                $folderaccessObj | Add-Member -type NoteProperty -name "membername" -Value $groupmember.name
+                $folderaccessObj | Add-Member -type NoteProperty -name "InheritanceFlags" -Value $folderaccess.InheritanceFlags
+                $folderaccessObjlist+=$folderaccessObj
+            }
+        }
+       }
+      }
+      return $folderaccessObjlist
+  }
+
+
+  function GetChildItemByDepth{
+  param(
+  [int]$StartLevel,# 0 = include base folder, 1 = sub-folders only, 2 = start at 2nd level
+  [int]$Depth,# How many levels deep to scan
+  [string]$Path# starting path
+  )
+
+    For ($i=$StartLevel; $i -le $Depth; $i++) {
+        $Levels = "\*" * $i
+        (Resolve-Path $Path$Levels).ProviderPath | Get-Item | Where PsIsContainer |
+        Select FullName
+    }
+  }
+
+
+  function Main{
+param(
+  [string]$folder1,
+  [string]$folder2,
+  [int]$depth
+  )
+  $folderlist1=GetChildItemByDepth -StartLevel 0 -Depth $depth -Path $folder1
+  $folderlist2=GetChildItemByDepth -StartLevel 0 -Depth $depth -Path $folder2
+  foreach ($folderx in $folderlist1){
+    $relativefolderxname=$folderx.FullName.SubString($folder1.Length)
+    foreach ($foldery in $folderlist2){
+        $relativefolderyname=$foldery.FullName.SubString($folder2.Length)
+        if ($relativefolderxname.ToUpper() -eq $relativefolderyname.ToUpper()){
+            CompareFolderPerm -folder1 $folderx.FullName -folder2 $foldery.FullName
+            break
+        }
+    }
+  }
+  }
+
+ Main -folder1 "\\s133f305.cn133.corpintra.net\S133F305_FS_POOL_08$\_deactivated_A133_CAR2GO\0905\0000 Weekly report" `
+ -folder2 "\\SCDCF0000036.cn.svc.corpintra.net\A133_G10124$\0000 Weekly report" -depth 2
