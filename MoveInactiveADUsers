@@ -1,0 +1,104 @@
+#=======================================================================
+#      Microsoft provides programming examples for illustration only, 
+#      without warranty either expressed or implied, including, but 
+#      not limited to, the implied warranties of merchantability 
+#      and/or fitness for a particular purpose. It is assumed 
+#      that you are familiar with the programming language being 
+#      demonstrated and the tools used to create and debug procedures. 
+#      Microsoft support professionals can help explain the functionality 
+#      of a particular procedure, but they will not modify these examples 
+#      to provide added functionality or construct procedures to meet your 
+#      specific needs. If you have limited programming experience, you may 
+#      want to contact a Microsoft Certified Partner or the Microsoft fee-based 
+#      consulting line at (800) 936-5200. For more information about Microsoft 
+#      Certified Partners, please visit the following Microsoft Web site: 
+#      http://www.microsoft.com/partner/referral/
+#
+#========================= Start of the script =========================
+function MoveInactiveUsers 
+ (
+ [parameter(Mandatory=$false)][String]$Searchbase,
+ [String]$TargetPath,
+ [TimeSpan]$InactiveTimeSpan,
+ [bool]$ExcludeLastLogondateNull,
+ [bool]$Move
+ )
+ {
+    #log file path
+    $file_output=".\inactiveusersoutput.txt"
+
+    #Load the required Snapins
+     if (!(import-module "activedirectory" -ea 0)) {
+     Write-Host "Loading active directory module." -ForegroundColor Yellow
+         try
+         {
+            import-module "activedirectory" -ea Stop
+         }
+         catch
+         {
+              Write-Host "[ERROR] ActiveDirectory Module couldn't be loaded. Script will stop!" 
+              Exit 1 
+         }
+     }#endif
+
+    if(Test-Path $file_output){
+        Remove-Item $file_output
+    }
+
+
+    #users
+    if ([string]::IsNullOrEmpty($Searchbase))
+    {
+        $inactiveusers=search-adaccount -UsersOnly -AccountInactive -TimeSpan $InactiveTimeSpan  
+    } 
+    else
+    {
+        $inactiveusers=search-adaccount -UsersOnly -SearchBase $Searchbase -AccountInactive -TimeSpan $InactiveTimeSpan
+    }
+
+
+    
+
+    if ($Move -eq $true)
+    {
+        "********** Start move users**********">>$file_output
+        if ($inactiveusers -ne $null)
+        {
+            foreach ($user in $inactiveusers){
+                "Move user:" + $user.Name>>$file_output
+
+                if ($ExcludeLastLogondateNull -eq $true -and $user.lastlogondate -eq $null)
+                {
+                    "Don't move the user that lastlogondate is null" >>$file_output
+                }
+                else
+                {
+                     try
+                     {
+                        move-adobject -identity $user.DistinguishedName -targetpath $TargetPath
+                        "Success to move the user" >>$file_output
+                     }
+                     catch
+                     {
+                        Write-Host $Error[0] -ForegroundColor Red
+                        $Error[0]>>$file_output
+                     }
+                }
+
+            } 
+        }
+        "********** Complete move users**********">>$file_output   
+    }
+    else
+    {
+        "********** List all inactive users, not move them**********">>$file_output
+        $inactiveusers>>$file_output
+    }
+ }
+
+
+ #MoveInactiveUsers -TargetPath "OU=OU1,DC=TFSTrain,DC=com" -InactiveTimeSpan 90.00:00:00 `
+ #-ExcludeLastLogondateNull $true -Move $true
+
+ MoveInactiveUsers -Searchbase "OU=InactiveUserORPC2,DC=TFSTrain,DC=com" -TargetPath "OU=OU1,DC=TFSTrain,DC=com" -InactiveTimeSpan 90.00:00:00 `
+ -ExcludeLastLogondateNull $false -Move $false
