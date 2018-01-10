@@ -1,0 +1,63 @@
+function AddADUsers ([String]$csvfilepath){
+ 
+    #log file path
+    $file_output=".\output.txt"
+
+    #Load the required Snapins
+     if (!(import-module "activedirectory" -ea 0)) {
+     Write-Host "Loading active directory module." -ForegroundColor Yellow
+         try
+         {
+            import-module "activedirectory" -ea Stop
+         }
+         catch
+         {
+              Write-Host "[ERROR] ActiveDirectory Module couldn't be loaded. Script will stop!"
+              Exit 1 
+         }
+     }#endif
+
+    if(Test-Path $file_output){
+        Remove-Item $file_output
+    }
+
+    $names = Import-CSV $csvfilepath -Encoding Default
+
+    "********** Start **********">>$file_output
+
+    foreach ($name in $names) {
+        try
+        {
+            "Add and enable new AD user:" + $name.Name>>$file_output
+            $secPwd = ConvertTo-SecureString -AsPlainText $name.AccountPassword -Force
+            new-aduser -Name $name.Name `
+            -SamAccountName $name.SamAccountName `
+            -UserPrincipalName $name.UserPrincipalName `
+            -AccountPassword $secPwd `
+            -EmailAddress $name.EmailAddress `
+            -DisplayName $name.DisplayName -Path $name.Path `
+            -PassThru | Enable-ADAccount
+
+            if (-not [string]::IsNullOrEmpty($name.Group))
+            {
+                $groups=$name.Group.Split(";")
+                foreach ($group in $groups)
+                {
+                    Add-ADGroupMember $group -Members $name.SamAccountName
+                }
+            }
+
+            "Success to add the user">>$file_output
+        }
+        catch
+        {
+            Write-Host $Error[0] -ForegroundColor Red
+            $Error[0]>>$file_output
+        }
+    }
+
+    "********** Complete **********">>$file_output
+}
+
+AddADUsers -csvfilepath "C:\MoveInactiveADResources\NewUsers4.csv"
+
