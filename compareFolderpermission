@@ -22,11 +22,11 @@ param(
   [string]$folder2 
   )
 
-    $checkedRights="FullControl;Modify, Synchronize;ReadAndExecute, Synchronize"
+    $checkedRights="FullControl;Modify, Synchronize;ReadAndExecute, Synchronize;Read, Synchronize;Write, Synchronize"
 
-    $comparerulefortwofolders="FullControl+Modify, Synchronize-Modify, Synchronize;ReadAndExecute, Synchronize-ReadAndExecute, Synchronize;ListFolderContents-ListFolderContents"
+    $comparerulefortwofolders="FullControl+Modify, Synchronize-Modify, Synchronize;ReadAndExecute, Synchronize-ReadAndExecute, Synchronize;ListFolderContents-ListFolderContents;Read, Synchronize-Read, Synchronize;Write, Synchronize-Write, Synchronize"
 
-    $excludegroups="system,a133_ntfsm,administrators"
+    $excludegroups="system,administrators"
 
     $file_output="c:\itm\outputList.txt"
 
@@ -40,15 +40,19 @@ param(
 
 
     $ret=GetFolderPerm -folder $folder1 -checkedRights $checkedRights -excludegroups $excludegroups -compareRules $comparerulefortwofolders
+    (Get-Date).ToString('hh:mm:ss tt')+ `
+    ": Totally users of 1st folder:" + $ret.Count>>$file_output
     $ret2=GetFolderPerm -folder $folder2 -checkedRights $checkedRights -excludegroups $excludegroups -compareRules $comparerulefortwofolders
-
+    (Get-Date).ToString('hh:mm:ss tt')+ `
+    ": Totally users of 2st folder:" + $ret2.Count>>$file_output
     
 
     foreach ($rule in $comparerulefortwofolders.Split(";")){
          
         #Compare folder1 with folder2 and find those members that exist in Folder1 but not exist in Folder2
         
-        $differentmeb1,$differentmeb2
+        $differentmeb1=@()
+        $differentmeb2=@()
 
 
         "============ Rule: "+ $rule+" ============">>$file_output
@@ -67,10 +71,10 @@ param(
             "****** Summary ******">>$file_output
             "Totally " + ($differentmeb1.Count+$differentmeb2.Count).ToString()  + " different members">>$file_output
             foreach ($mem in $differentmeb1){
-                $mem.ToString()>>$file_output
+                "SamAccountName:" +$mem.SamAccountName + ". DistinguishedName:" + $mem.distinguishedname >>$file_output
             }
             foreach ($mem in $differentmeb2){
-                $mem.ToString()>>$file_output
+                 "SamAccountName:" +$mem.SamAccountName + ". DistinguishedName:" + $mem.distinguishedname >>$file_output
             }
 
 
@@ -78,14 +82,14 @@ param(
             $differentmeb1.Count.ToString()+" members in the 1st folder, but not in 2nd folder">>$file_output
             if ($differentmeb1.Count -ne 0){
                 foreach ($mem in $differentmeb1){
-                $mem.ToString()>>$file_output
+                     "SamAccountName:" +$mem.SamAccountName + ". DistinguishedName:" + $mem.distinguishedname >>$file_output
                 }
             }
 
             $differentmeb2.Count.ToString()+" members in the 2nd folder, but not in 1st folder">>$file_output
             if ($differentmeb2.Count -ne 0){
                 foreach ($mem in $differentmeb2){
-                $mem.ToString()>>$file_output
+                     "SamAccountName:" +$mem.SamAccountName + ". DistinguishedName:" + $mem.distinguishedname >>$file_output
                 }
             }
            }
@@ -127,7 +131,7 @@ param(
             $samememberwithsamerights=$false
             foreach ($folderperm2 in $folderpermlist2){
             if ($ruleto.IndexOf($folderperm2.FileSystemRights.ToString()) -ge 0){
-                if ($folderperm1.membername -eq $folderperm2.membername){
+                if ($folderperm1.distinguishedname -eq $folderperm2.distinguishedname){
                     $samememberwithsamerights=$true
                     break
                 }
@@ -135,7 +139,10 @@ param(
             }
 
             if ($samememberwithsamerights -eq $false){
-                $ret+=$folderperm1.membername.ToString()
+                $retitem=New-Object System.Object
+                $retitem | Add-Member -type NoteProperty -name "distinguishedname" -Value $folderperm1.distinguishedname
+                $retitem | Add-Member -type NoteProperty -name "SamAccountName" -Value $folderperm1.SamAccountName
+                $ret+=$retitem
            }
         }
     }
@@ -157,25 +164,103 @@ param(
 
      $folderaccessObjlist=@()
 
+      $objForest = [System.DirectoryServices.ActiveDirectory.Forest]::GetCurrentForest()
+      $DomainList = @($objForest.Domains | Select-Object Name)
+
+      $domaininfo=Get-ADDomain
+              
+        $currentdomaindnsroot=$domaininfo.DNSRoot
+        $cuurentdomainDN=$domaininfo.DistinguishedName
+        $currentdomainNetBIOSName=$domaininfo.NetBIOSName
+
       foreach($folderaccess in $folerpermlist.Access){
       if ($checkedRights.IndexOf($folderaccess.FileSystemRights.ToString()) -ge 0){
         
         ##Get AD group members
+       
+        $domain=""
+        if ($folderaccess.IdentityReference.ToString().Indexof("\") -gt 0)
+        {$domain=$folderaccess.IdentityReference.ToString().SubString(0,$folderaccess.IdentityReference.ToString().Indexof("\"))}
         $identityname=$folderaccess.IdentityReference.ToString().SubString($folderaccess.IdentityReference.ToString().Indexof("\")+1)
+
+
         if ($folderaccess.IdentityReference.ToString().Contains("BUILTIN") -eq $false `
         -and $folderaccess.IdentityReference.ToString().Contains("NT AUTHORITY") -eq $false `
         -and $folderaccess.IdentityReference.ToString().ToLower().Contains("a133_a_0001") -eq $false `
-        -and $excludegroups.IndexOf($identityname) -lt 0){
+        -and $excludegroups.IndexOf($identityname) -lt 0 `
+        -and $excludegroups.ToLower().IndexOf($folderaccess.IdentityReference.ToString().ToLower()) -lt 0
+        ){
+
+
+            $members=@()
+
+             #Get server for each identify
+            $domainServerName=""
+            $blnFound=$false
+            foreach ($tempdomain in $DomainList)
+            {
+                $arr=$tempdomain.Name.Split(".")
+                $blnFound=$false
+                if ($arr.Count -gt 0 -and $arr[0] -eq $domain)
+                {
+                    $blnFound=$true
+                    $domainServerName=$tempdomain.Name
+                    break
+                }
+            }
+
+            if ($blnFound -eq $false)
+            {
+                $members=Get-ADUser $identityname
+            }
+            else
+            {
+                $members=Get-ADUser -Filter {samaccountname -eq $identityname} -Server $domainServerName
+
+                if ($members.Count -le 0)
+                {
+                    $members=@()
+                    $dn=Get-ADGroup -Filter {samaccountname -eq $identityname} -Server $domainServerName
+
+
+                    if ($dn -ne $null)
+                    {
+                        $members=Get-ADGroupMember -Identity $dn -Recursive
+                        <#
+                        #$members=Get-ADGroupMember -Identity $identityname -Recursive
+                        #Get-ADGroupMember has an issue that cannot get identify from other domains
+                        #So use dsget instead
+                        $membersandgroups=dsquery group $dn | dsget group -members -expand
+                
+                        foreach ($temp in $membersandgroups)
+                        {
+                            if (-not ([string]::IsNullOrEmpty($temp)))
+                            {
+                                #The $temp value is like "CN=GroupTest2,CN=Users,DC=TFSTRAIN,DC=COM".
+                                #need to remove " at the begining and at the ending
+                                $temp=$temp.Substring(1,$temp.Length-2)
+
+                                #Get server from DN
+                                #DN example:CN=Michael Wang,OU=OU1,DC=TFSTRAIN,DC=COM
+                                #Server example: TFSTRAIN.COM
+                                $server=$temp.substring($temp.indexof(",DC=")).replace(",DC=",".").substring(1)
+
+                                $member=Get-ADObject $temp -server $domainServerName
+                                if ($member.ObjectClass -eq "user")
+                                {
+                                    $members+=$member
+                                } 
+                            }
+                        }
+                        #>
+                    }
+                }
+            }
             
-            $members=""
-            try{
-                $members=Get-ADUser -Identity $identityname
-            }
-            catch{
-                $members=Get-ADGroupMember -Identity $identityname -Recursive
-            }
+            
+ 
 
-
+            
             foreach($groupmember in $members){
                 $folderaccessObj=New-Object System.Object
 
@@ -197,7 +282,8 @@ param(
                }
 
                 #$folderaccessObj | Add-Member -type NoteProperty -name "FileSystemRights" -Value $folderaccess.FileSystemRights
-                $folderaccessObj | Add-Member -type NoteProperty -name "membername" -Value $groupmember.name
+                $folderaccessObj | Add-Member -type NoteProperty -name "distinguishedname" -Value $groupmember.distinguishedname
+                $folderaccessObj | Add-Member -type NoteProperty -name "SamAccountName" -Value $groupmember.SamAccountName
                 $folderaccessObj | Add-Member -type NoteProperty -name "InheritanceFlags" -Value $folderaccess.InheritanceFlags
                 $folderaccessObjlist+=$folderaccessObj
             }
@@ -227,9 +313,10 @@ param(
 param(
   [string]$folder1,
   [string]$folder2,
-  [int]$depth
+  [int]$depth# 0 = only get root folder, 1 = get root folder and the subfoler under root folder, 2 = get root folder, 1st level subfolder and 2nd level subfolder
   )
-  $folderlist1=GetChildItemByDepth -StartLevel 0 -Depth $depth -Path $folder1
+
+  $folderlist1=GetChildItemByDepth -StartLevel 0 -Depth $depth -Path $folder1 | Sort-Object -Property FullName
   $folderlist2=GetChildItemByDepth -StartLevel 0 -Depth $depth -Path $folder2
   foreach ($folderx in $folderlist1){
     $relativefolderxname=$folderx.FullName.SubString($folder1.Length)
@@ -243,5 +330,40 @@ param(
   }
   }
 
- Main -folder1 "\\s133f305.cn133.corpintra.net\S133F305_FS_POOL_08$\_deactivated_A133_CAR2GO\0905\0000 Weekly report" `
- -folder2 "\\SCDCF0000036.cn.svc.corpintra.net\A133_G10124$\0000 Weekly report" -depth 2
+
+
+  function CompareFolderPermViaCSV ([String]$csvfilepath){
+ 
+    #log file path
+    $file_output="c:\itm\outputList.txt"
+
+    if(Test-Path $file_output){
+        Remove-Item $file_output
+    }
+
+    $paras = Import-CSV $csvfilepath -Encoding Default
+
+    foreach ($para in $paras) {
+        #try
+        #{
+            "########################################################################################">>$file_output
+            (Get-Date).ToString('hh:mm:ss tt')+ ": Folder1:" + $para.Folder1>>$file_output
+            (Get-Date).ToString('hh:mm:ss tt')+ ": Folder2:" + $para.Folder2>>$file_output
+            (Get-Date).ToString('hh:mm:ss tt')+ ": Depth:" + $para.Depth>>$file_output
+            "########################################################################################">>$file_output
+             Main -folder1 $para.Folder1 -folder2 $para.Folder2 -depth $para.Depth
+             "`n">>$file_output
+            "`n">>$file_output
+
+        #}
+        #catch
+        #{
+        #    Write-Host $Error[0] -ForegroundColor Red
+        #    $Error[0]>>$file_output
+        #}
+    }
+}
+
+
+
+CompareFolderPermViaCSV -csvfilepath "C:\Temp\CompareList.csv"
