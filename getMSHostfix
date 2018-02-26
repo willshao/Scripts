@@ -1,3 +1,5 @@
+
+
 Function Get-MSHotfix 
 {     
 param( 
@@ -39,3 +41,162 @@ param(
 } 
 
 Get-MSHotfix 
+
+
+
+
+
+#=======================================================================
+#      Microsoft provides programming examples for illustration only, 
+#      without warranty either expressed or implied, including, but 
+#      not limited to, the implied warranties of merchantability 
+#      and/or fitness for a particular purpose. It is assumed 
+#      that you are familiar with the programming language being 
+#      demonstrated and the tools used to create and debug procedures. 
+#      Microsoft support professionals can help explain the functionality 
+#      of a particular procedure, but they will not modify these examples 
+#      to provide added functionality or construct procedures to meet your 
+#      specific needs. If you have limited programming experience, you may 
+#      want to contact a Microsoft Certified Partner or the Microsoft fee-based 
+#      consulting line at (800) 936-5200. For more information about Microsoft 
+#      Certified Partners, please visit the following Microsoft Web site: 
+#      http://www.microsoft.com/partner/referral/
+#
+#========================= Start of the script =========================
+
+$WorkingDir="C:\CheckKBScript"
+$PSExecDir=$WorkingDir + "\PSTools\PsExec.exe"
+
+#The Sever.txt format
+#Each line indicates one computer
+#It can be NetBIOS name, an Internet Protocol (IP) address, or a fully qualified domain name (FQDN) of a remote computer
+#When use IP, you can use IP range, ie: xx.yy.zz.1:100
+$CheckedComputerListFile=$WorkingDir+"\Server.txt"
+
+#If more than one KB need to be checked, split with ,ie:KBxxx,KByyy
+$CheckedKBList="KB4012212"
+
+foreach ($CheckedKB in $CheckedKBList.Split(","))
+{
+    $OutputFileName=$WorkingDir+ "\" + $CheckedKB + ".txt"
+    if (Test-Path $OutputFileName) 
+    {
+        Remove-Item $OutputFileName
+    }
+
+    $FileContent=Get-Content $CheckedComputerListFile
+
+    $IPRangeSplitStr=":"
+
+
+    $Log="========== Checked KB: " + $CheckedKB + " =========="
+    Add-Content $Log -Path $OutputFileName
+    $Log="Start time: " + (Get-Date).ToString('hh:mm:ss tt')
+    Add-Content $Log -Path $OutputFileName
+
+    foreach ($Computer in $FileContent)
+    {
+
+        $ComputerList=@()
+
+        if ($Computer.IndexOf($IPRangeSplitStr) -gt 0)
+        {
+        #Handle IP range, format:xx.yy.zz.1:100
+            $StartIPIndex=[int]$Computer.Substring($Computer.LastIndexOf(".")+1,$Computer.IndexOf($IPRangeSplitStr)-$Computer.LastIndexOf(".")-1)
+            $EndIPIndex=[int]$Computer.Substring($Computer.IndexOf($IPRangeSplitStr)+1)
+
+            for ($i=$StartIPIndex;$i -le $EndIPIndex;$i++)
+            {   
+                $ComputerList+=$Computer.Substring(0,$Computer.LastIndexOf(".")+1) + $i.ToString()
+            }
+
+        } 
+        else
+        {
+            $ComputerList+=$Computer
+        }
+
+        foreach ($item in $ComputerList)
+        {
+                try
+                {
+                    #if (!(Get-HotFix -Id $CheckedKB -ComputerName $item))
+                    #{
+                    #    $Log="KB not found: " + $item
+                    #    Add-Content $Log -Path $OutputFileName
+                    #} 
+
+
+                    #.\PsExec.exe \\cvx86 cmd wmic qfe get hotfixid
+                    #PS C:\CheckKBScript\PSTools> C:\CheckKBScript\PSTools\PsExec.exe \\cvx86 -u root\administrator -p Password1 wmic qfe get hotfixid
+                    #$PSResult=$PSExecDir + " \\" + $item + " wmic qfe get hotfixid" + " | Select-String KB"
+
+                    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+                    $pinfo.FileName = "C:\CheckKBScript\PSTools\PsExec.exe"
+                    $pinfo.RedirectStandardError = $true
+                    $pinfo.RedirectStandardOutput = $true
+                    $pinfo.UseShellExecute = $false
+                    $pinfo.Arguments = "\\"+ $item +" wmic qfe get hotfixid"
+                    $p = New-Object System.Diagnostics.Process
+                    $p.StartInfo = $pinfo
+                    $p.Start() | Out-Null
+                    $p.WaitForExit()
+                    $stdout = $p.StandardOutput.ReadToEnd()
+                    $stderr = $p.StandardError.ReadToEnd()
+
+                    if ($p.ExitCode -eq 0)
+                    {
+                        if ($stdout -eq $null)
+                        {
+                            $Log="Error: " + $item + ". Error message:" +$stderr.ToString()
+                            Add-Content $Log -Path $OutputFileName 
+                        }
+                        else
+                        {
+                            $KB=$stdout | Select-String $CheckedKB
+                            if ($KB -eq $null)
+                            {
+                                $Log="KB not found: " + $item
+                                Add-Content $Log -Path $OutputFileName
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (Test-Connection -ComputerName $item -Quiet)
+                        {
+                            $Log="Error: " + $item + ". Ping pass. Error message: " + $stderr.ToString().replace("`n",",").replace("`r",",")
+                            Add-Content $Log -Path $OutputFileName
+                        }
+                        else
+                        {
+                            $Log="Error: " + $item + ". Ping failed. Error message: " + $stderr.ToString().replace("`n",",").replace("`r",",")
+                            Add-Content $Log -Path $OutputFileName
+                        } 
+                    }
+
+
+
+                }
+                catch
+                {
+                    if (Test-Connection -ComputerName $item -Quiet)
+                    {
+                        $Log="Error: " + $item + ". Ping pass. Error message: " + $Error[0]
+                        Add-Content $Log -Path $OutputFileName
+                    }
+                    else
+                    {
+                        $Log="Error: " + $item + ". Ping failed. Error message: " + $Error[0]
+                        Add-Content $Log -Path $OutputFileName
+                    }
+                }    
+        }
+
+    }
+     $Log="Finish time: " + (Get-Date).ToString('hh:mm:ss tt')
+    Add-Content $Log -Path $OutputFileName
+}
+
+
+
